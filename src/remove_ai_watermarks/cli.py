@@ -426,6 +426,17 @@ def _write_output_or_exit(output: Path, bgr: NDArray[Any], alpha: NDArray[Any] |
         raise SystemExit(1)
 
 
+def _strip_metadata_or_warn(ctx: click.Context, output: Path) -> None:
+    """Best-effort ``--strip-metadata`` on a just-written output; the warning is verbose-only."""
+    try:
+        from remove_ai_watermarks.metadata import remove_ai_metadata
+
+        remove_ai_metadata(output, output)
+    except Exception as e:
+        if ctx.obj.get("verbose"):
+            console.print(f"  Warning: Failed to strip metadata: {e}")
+
+
 def _no_visible_mark_exit(source: Path) -> NoReturn:
     """Explain why no visible watermark was removed, then exit non-zero.
 
@@ -652,13 +663,7 @@ def _run_visible_explicit(
 
     _write_output_or_exit(output, result, alpha)
     if strip_metadata:
-        try:
-            from remove_ai_watermarks.metadata import remove_ai_metadata
-
-            remove_ai_metadata(output, output)
-        except Exception as e:
-            if ctx.obj.get("verbose"):
-                console.print(f"  Warning: Failed to strip metadata: {e}")
+        _strip_metadata_or_warn(ctx, output)
 
     size_kb = output.stat().st_size / 1024
     console.print(f"  Saved: {output}  ({size_kb:.0f} KB, {elapsed:.2f}s)")
@@ -805,13 +810,7 @@ def cmd_erase(
     _write_output_or_exit(output, result, alpha)
 
     if strip_metadata:
-        try:
-            from remove_ai_watermarks.metadata import remove_ai_metadata
-
-            remove_ai_metadata(output, output)
-        except Exception as e:
-            if ctx.obj.get("verbose"):
-                console.print(f"  Warning: Failed to strip metadata: {e}")
+        _strip_metadata_or_warn(ctx, output)
 
     size_kb = output.stat().st_size / 1024
     console.print(f"  Erased {len(boxes)} region(s) -> {output}  ({size_kb:.0f} KB, {elapsed:.2f}s)")

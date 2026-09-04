@@ -21,6 +21,7 @@ stays cheap in a bare environment (matching the rest of the package).
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -127,8 +128,6 @@ def _register_heif() -> None:
     if _heif_registered:
         return
     _heif_registered = True
-    import contextlib
-
     with contextlib.suppress(Exception):
         import pillow_heif  # pyright: ignore[reportMissingImports]
 

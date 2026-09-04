@@ -60,6 +60,7 @@ C2PA_BOX_TYPES: frozenset[bytes] = frozenset({b"uuid", b"jumb"})
 # byte-order ambiguity and stays surgical: only AI-bearing XMP is dropped, plain
 # XMP (copyright, camera info) is kept.
 _AI_LABEL_MARKERS: tuple[bytes, ...] = AIGC_MARKERS + IPTC_AI_MARKERS + IPTC_AI_FIELD_MARKERS
+_LONGEST_AI_LABEL_MARKER = max(len(marker) for marker in _AI_LABEL_MARKERS)
 
 # Adobe XMP packet delimiters (XMP spec part 3). In HEIF/AVIF the XMP packet
 # sits inside a ``meta``-box ``mime`` item whose bytes live in ``mdat`` / ``idat``,
@@ -404,7 +405,6 @@ def _payload_has_ai_label(
     max_scan: int,
 ) -> bool:
     """Scan a bounded prefix of one metadata payload for an AI-label marker."""
-    longest_marker = max(len(marker) for marker in _AI_LABEL_MARKERS)
     remaining = min(end - start, max_scan)
     overlap = b""
     stream.seek(start)
@@ -415,7 +415,7 @@ def _payload_has_ai_label(
         searchable = overlap + chunk
         if any(marker in searchable for marker in _AI_LABEL_MARKERS):
             return True
-        overlap = searchable[-(longest_marker - 1) :]
+        overlap = searchable[-(_LONGEST_AI_LABEL_MARKER - 1) :]
         remaining -= len(chunk)
     return False
 

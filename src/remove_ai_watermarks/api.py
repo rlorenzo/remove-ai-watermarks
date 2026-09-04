@@ -57,10 +57,8 @@ def visible_provenance(source: str | Path) -> frozenset[str]:
     Best-effort: any read error yields an empty set (no relaxation). Metadata-only, so
     it never loads cv2/torch.
     """
-    import contextlib
-
     path = Path(source)
-    with contextlib.suppress(Exception):
+    with suppress(Exception):
         from remove_ai_watermarks import identify
 
         rep = identify.identify(path, check_visible=False, check_invisible=False)
@@ -77,11 +75,9 @@ def _tc260_vendors(path: Path) -> frozenset[str]:
     detections the fallback recovers today. The re-read is deliberately isolated -- a
     failure here must narrow the answer, never discard the rest of the provenance.
     """
-    import contextlib
-
     from remove_ai_watermarks._internal.constants import TC260_FALLBACK_VENDORS
 
-    with contextlib.suppress(Exception):
+    with suppress(Exception):
         from remove_ai_watermarks.metadata import aigc_label, uscc_of
         from remove_ai_watermarks.watermark_registry import tc260_producer_vendors
 

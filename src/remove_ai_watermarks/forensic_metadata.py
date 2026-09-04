@@ -546,18 +546,23 @@ def read_webp_late_metadata_path(path: Path, window: int = _RAW_SCAN_HEAD) -> li
                 if chunk_type in RIFF_METADATA_CHUNKS and start >= window:
                     handle.seek(start)
                     body = handle.read(min(safe_length, _B64_CAP))
-                    entry: dict[str, Any] = {
-                        "type": chunk_type.decode("latin-1"),
-                        "length": length,
-                        "base64": _b64(body),
-                    }
-                    if len(body) < safe_length:
-                        entry["truncated"] = True
-                    chunks.append(entry)
+                    chunks.append(_chunk_entry(chunk_type, length, body, safe_length))
                 position = start + safe_length + (safe_length & 1)
     except (OSError, struct.error) as exc:
         chunks.append({"error": _safe_str(exc)})
     return chunks
+
+
+def _chunk_entry(chunk_type: bytes, length: int, body: bytes, safe_length: int) -> dict[str, Any]:
+    """Forensic record of one metadata chunk: type, declared length, and a capped base64 body."""
+    entry: dict[str, Any] = {
+        "type": chunk_type.decode("latin-1"),
+        "length": length,
+        "base64": _b64(body),
+    }
+    if len(body) < safe_length:
+        entry["truncated"] = True
+    return entry
 
 
 def sha256_of(data: bytes) -> str:
@@ -724,14 +729,7 @@ def read_png_late_metadata_path(path: Path, window: int = _RAW_SCAN_HEAD) -> lis
                 safe_length = max(0, min(length, file_size - data_start))
                 if chunk_type in PNG_METADATA_CHUNKS and data_start >= window:
                     body = f.read(min(safe_length, _B64_CAP))
-                    entry: dict[str, Any] = {
-                        "type": chunk_type.decode("latin-1"),
-                        "length": length,
-                        "base64": _b64(body),
-                    }
-                    if len(body) < safe_length:
-                        entry["truncated"] = True
-                    chunks.append(entry)
+                    chunks.append(_chunk_entry(chunk_type, length, body, safe_length))
                 pos = data_start + safe_length + 4
                 if chunk_type == b"IEND":
                     break
