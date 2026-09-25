@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import struct
 import subprocess
@@ -12,6 +13,7 @@ import pytest
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
+from remove_ai_watermarks._internal.utils import atomic_output
 from remove_ai_watermarks.identify import identify
 from remove_ai_watermarks.metadata import (
     C2PA_UUID,
@@ -686,6 +688,115 @@ class TestRemoveAiMetadata:
 
         with Image.open(path) as cleaned:
             assert "parameters" not in cleaned.info
+
+    def test_in_place_failure_mid_write_leaves_original_intact(self, tmp_path, monkeypatch):
+        """A save that dies part-way (Ctrl-C, full disk) must not truncate the only copy:
+        the write lands on a sibling temp that is discarded, never on the source."""
+        pnginfo = PngInfo()
+        pnginfo.add_text("parameters", "test data")
+        path = tmp_path / "inplace.png"
+        Image.new("RGB", (32, 32)).save(path, pnginfo=pnginfo)
+        original = path.read_bytes()
+
+        def partial_save(self, fp, *args, **kwargs):
+            Path(fp).write_bytes(b"\x89PNG partial")
+            raise OSError("disk full")
+
+        monkeypatch.setattr(Image.Image, "save", partial_save)
+        with pytest.raises(OSError, match="disk full"):
+            remove_ai_metadata(path)
+
+        assert path.read_bytes() == original
+        assert list(tmp_path.iterdir()) == [path]
+
+    def test_in_place_jpeg_interrupt_during_exif_rewrite_leaves_original_intact(self, tmp_path, monkeypatch):
+        """An interrupt during the lossless JPEG walk's EXIF re-insert must leave the
+        source untouched: nothing is written until the complete bytes are ready."""
+        path = tmp_path / "inplace.jpg"
+        Image.new("RGB", (32, 32), (90, 30, 200)).save(path, "JPEG", exif=piexif.dump({"0th": {}}))
+        # An APP11 JUMBF segment the walk drops, so its rewrite differs from the source.
+        app11 = b"JP\x00\x00jumb"
+        data = path.read_bytes()
+        path.write_bytes(data[:2] + b"\xff\xeb" + struct.pack(">H", len(app11) + 2) + app11 + data[2:])
+        original = path.read_bytes()
+
+        def interrupted_insert(*_args, **_kwargs):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr("remove_ai_watermarks.metadata._scrub_ai_exif", lambda _exif: ["x"])
+        monkeypatch.setattr(piexif, "insert", interrupted_insert)
+        with pytest.raises(KeyboardInterrupt):
+            remove_ai_metadata(path)
+
+        assert path.read_bytes() == original
+        assert list(tmp_path.iterdir()) == [path]
+
+    def test_in_place_jpeg_exif_rewrite_failure_never_publishes_partial_bytes(self, tmp_path, monkeypatch):
+        """piexif.insert writing part of its output and then raising (full disk) only
+        skips the best-effort scrub; the published file is the complete segment walk."""
+        path = tmp_path / "inplace.jpg"
+        Image.new("RGB", (32, 32), (90, 30, 200)).save(path, "JPEG", exif=piexif.dump({"0th": {}}))
+        app11 = b"JP\x00\x00jumb"
+        data = path.read_bytes()
+        path.write_bytes(data[:2] + b"\xff\xeb" + struct.pack(">H", len(app11) + 2) + app11 + data[2:])
+
+        def partial_insert(_exif, _image, new_file=None):
+            new_file.write(b"\xff\xd8partial")
+            raise OSError("disk full")
+
+        monkeypatch.setattr("remove_ai_watermarks.metadata._scrub_ai_exif", lambda _exif: ["x"])
+        monkeypatch.setattr(piexif, "insert", partial_insert)
+        remove_ai_metadata(path)
+
+        assert path.read_bytes() == data
+        assert list(tmp_path.iterdir()) == [path]
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+    def test_atomic_temporary_is_owner_only_while_written(self, tmp_path):
+        path = tmp_path / "restricted.png"
+        path.write_bytes(b"old")
+        path.chmod(0o640)
+
+        with atomic_output(path) as temporary_path:
+            assert temporary_path.stat().st_mode & 0o777 == 0o600
+            temporary_path.write_bytes(b"new")
+
+        assert path.stat().st_mode & 0o777 == 0o640
+        new = tmp_path / "new.png"
+        with atomic_output(new) as temporary_path:
+            temporary_path.write_bytes(b"new")
+        umask = os.umask(0o022)
+        os.umask(umask)
+        assert new.stat().st_mode & 0o777 == 0o666 & ~umask
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["new.png", "restricted.png"]
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+    def test_atomic_temporary_is_never_created_broader_than_owner_only(self, tmp_path, monkeypatch):
+        """Narrowing after creation leaves a window where another user can open the inode."""
+        created: dict[str, int] = {}
+        real_open = os.open
+
+        def recording_open(path, flags, mode=0o777, *args, **kwargs):
+            created[Path(path).name] = mode
+            return real_open(path, flags, mode, *args, **kwargs)
+
+        monkeypatch.setattr(os, "open", recording_open)
+        with atomic_output(tmp_path / "new.png") as temporary_path:
+            temporary_path.write_bytes(b"new")
+
+        assert created[temporary_path.name] == 0o600
+
+    def test_in_place_rewrite_preserves_file_mode(self, tmp_path):
+        pnginfo = PngInfo()
+        pnginfo.add_text("parameters", "test data")
+        path = tmp_path / "inplace.png"
+        Image.new("RGB", (32, 32)).save(path, pnginfo=pnginfo)
+        path.chmod(0o640)
+        mode = path.stat().st_mode
+
+        remove_ai_metadata(path)
+
+        assert path.stat().st_mode == mode
 
     def test_jpeg_output(self, tmp_path):
         """Test metadata removal for JPEG format."""
