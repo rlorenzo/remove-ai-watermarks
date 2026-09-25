@@ -314,6 +314,7 @@ class TestInvisibleCommand:
         assert "--hf-token is deprecated" in result.stderr
         assert "HF_TOKEN" in result.stderr
         assert "hf_s3cret" not in result.output
+        assert "hf_s3cret" not in result.stderr
 
     def test_invisible_cpu_offload_flows_to_engine(self, runner, sample_png, tmp_path):
         mock_cls, _mock_engine = _mock_invisible_engine()

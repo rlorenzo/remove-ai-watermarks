@@ -1370,7 +1370,7 @@ def _strip_jpeg_metadata_lossless(source_path: Path, output_path: Path) -> bool:
             if _scrub_ai_exif(exif):
                 piexif.insert(piexif.dump(exif), str(temporary_path))
         except Exception:
-            logger.debug("piexif EXIF scrub skipped on %s", output_path, exc_info=True)
+            logger.debug("piexif EXIF scrub skipped on %s", temporary_path, exc_info=True)
     return True
 
 
