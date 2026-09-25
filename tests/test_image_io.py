@@ -207,3 +207,30 @@ class TestQualityPreservingWrite:
     def test_unencodable_ext_returns_false_not_raises(self, tmp_path: Path) -> None:
         # a bogus extension cv2 can't encode returns False (never raises the cv2.error).
         assert image_io.imwrite(tmp_path / "x.zzz", _make_bgr()) is False
+
+
+class TestDecompressionBombGuard:
+    def test_huge_declared_png_is_refused_before_cv2_decodes_it(self, tmp_path: Path) -> None:
+        """A tiny PNG whose IHDR declares 30000x30000 would make cv2 allocate ~2.7 GB;
+        Pillow's MAX_IMAGE_PIXELS guard must fire from the header first."""
+        import struct
+        import zlib
+
+        from PIL import Image
+
+        def chunk(kind: bytes, payload: bytes) -> bytes:
+            crc = zlib.crc32(kind + payload) & 0xFFFFFFFF
+            return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", crc)
+
+        ihdr = struct.pack(">IIBBBBB", 30000, 30000, 8, 2, 0, 0, 0)
+        path = tmp_path / "bomb.png"
+        path.write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", ihdr)
+            + chunk(b"IDAT", zlib.compress(b"\x00" * 1024))
+            + chunk(b"IEND", b"")
+        )
+        assert path.stat().st_size < 1024
+
+        with pytest.raises(Image.DecompressionBombError):
+            image_io.imread(path)

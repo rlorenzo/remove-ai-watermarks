@@ -670,6 +670,56 @@ class TestRemoveAiMetadata:
         with Image.open(path) as cleaned:
             assert "parameters" not in cleaned.info
 
+    def test_in_place_failure_mid_write_leaves_original_intact(self, tmp_path, monkeypatch):
+        """A save that dies part-way (Ctrl-C, full disk) must not truncate the only copy:
+        the write lands on a sibling temp that is discarded, never on the source."""
+        pnginfo = PngInfo()
+        pnginfo.add_text("parameters", "test data")
+        path = tmp_path / "inplace.png"
+        Image.new("RGB", (32, 32)).save(path, pnginfo=pnginfo)
+        original = path.read_bytes()
+
+        def partial_save(self, fp, *args, **kwargs):
+            Path(fp).write_bytes(b"\x89PNG partial")
+            raise OSError("disk full")
+
+        monkeypatch.setattr(Image.Image, "save", partial_save)
+        with pytest.raises(OSError, match="disk full"):
+            remove_ai_metadata(path)
+
+        assert path.read_bytes() == original
+        assert list(tmp_path.iterdir()) == [path]
+
+    def test_in_place_jpeg_interrupt_during_exif_rewrite_leaves_original_intact(self, tmp_path, monkeypatch):
+        """The lossless JPEG walk rewrites twice (the segment copy, then piexif.insert);
+        an interrupt in the second rewrite must not leave a half-written source."""
+        path = tmp_path / "inplace.jpg"
+        Image.new("RGB", (32, 32), (90, 30, 200)).save(path, "JPEG", exif=piexif.dump({"0th": {}}))
+        original = path.read_bytes()
+
+        def interrupted_insert(*_args, **_kwargs):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr("remove_ai_watermarks.metadata._scrub_ai_exif", lambda _exif: ["x"])
+        monkeypatch.setattr(piexif, "insert", interrupted_insert)
+        with pytest.raises(KeyboardInterrupt):
+            remove_ai_metadata(path)
+
+        assert path.read_bytes() == original
+        assert list(tmp_path.iterdir()) == [path]
+
+    def test_in_place_rewrite_preserves_file_mode(self, tmp_path):
+        pnginfo = PngInfo()
+        pnginfo.add_text("parameters", "test data")
+        path = tmp_path / "inplace.png"
+        Image.new("RGB", (32, 32)).save(path, pnginfo=pnginfo)
+        path.chmod(0o640)
+        mode = path.stat().st_mode
+
+        remove_ai_metadata(path)
+
+        assert path.stat().st_mode == mode
+
     def test_jpeg_output(self, tmp_path):
         """Test metadata removal for JPEG format."""
         img = Image.new("RGB", (64, 64), color=(100, 150, 200))

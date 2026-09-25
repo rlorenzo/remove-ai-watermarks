@@ -15,6 +15,8 @@ from fractions import Fraction
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from remove_ai_watermarks._internal.utils import atomic_output
+
 if TYPE_CHECKING:
     from collections.abc import Generator, Sequence
     from typing import BinaryIO
@@ -289,12 +291,8 @@ def _temporary_video_path(output: Path, *, prefix: str) -> Generator[Path]:
         temporary_output.unlink(missing_ok=True)
 
 
-@contextmanager
-def atomic_video_output(output: Path) -> Generator[Path]:
-    """Yield a sibling temporary path and publish it only after success."""
-    with _temporary_video_path(output, prefix=f".{output.stem}-") as temporary_output:
-        yield temporary_output
-        os.replace(temporary_output, output)
+# Video outputs share the generic sibling-temp + fsync + os.replace publisher.
+atomic_video_output = atomic_output
 
 
 def _video_codec_args(suffix: str, *, crf: int, profile: VideoEncodeProfile) -> list[str]:

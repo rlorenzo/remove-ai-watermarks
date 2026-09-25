@@ -18,6 +18,9 @@ on:
         description: "Version to distribute (no leading v), e.g. 0.10.3. Blank = latest on PyPI."
         required: false
 
+permissions:
+  contents: read
+
 jobs:
   resolve:
     runs-on: ubuntu-latest
@@ -28,24 +31,33 @@ jobs:
     steps:
       - name: Resolve target version
         id: v
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "release" ]; then
             v="${GITHUB_REF_NAME#v}"
-          elif [ -n "${{ github.event.inputs.version }}" ]; then
-            v="${{ github.event.inputs.version }}"
+          elif [ -n "$INPUT_VERSION" ]; then
+            v="$INPUT_VERSION"
           else
             v=$(curl -fsSL https://pypi.org/pypi/remove-ai-watermarks/json \
               | python3 -c "import sys,json;print(json.load(sys.stdin)['info']['version'])")
+          fi
+          # The version flows into later steps and jobs; allow only PEP 440 characters.
+          if ! [[ "$v" =~ ^[0-9][0-9A-Za-z.+-]*$ ]]; then
+            echo "::error::Invalid version: $v"
+            exit 1
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Target version: $v"
 
       - name: Wait for the sdist on PyPI, capture url + sha256
         id: sdist
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
         run: |
           set -euo pipefail
-          v="${{ steps.v.outputs.version }}"
+          v="$VERSION"
           for i in $(seq 1 30); do
             if rel=$(curl -fsSL "https://pypi.org/pypi/remove-ai-watermarks/$v/json" 2>/dev/null); then
               url=$(echo "$rel" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next((u['url'] for u in d['urls'] if u['packagetype']=='sdist'),''))")
@@ -68,7 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout the tap
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: wiltodelta/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -113,6 +125,7 @@ jobs:
       - name: Sync and publish the ComfyUI nodes
         env:
           GH_TOKEN: ${{ secrets.COMFYUI_RELEASE_TOKEN }}
+          VERSION: ${{ needs.resolve.outputs.version }}
         run: |
           set -euo pipefail
           repo=wiltodelta/ComfyUI-remove-ai-watermarks
@@ -122,7 +135,7 @@ jobs:
           gh workflow run "$workflow" \
             --repo "$repo" \
             --ref main \
-            --raw-field library_version="${{ needs.resolve.outputs.version }}"
+            --raw-field library_version="$VERSION"
 
           run_id=""
           for attempt in $(seq 1 30); do

@@ -307,7 +307,24 @@ _seed_option = click.option(
     help="Random seed for reproducibility. Default 0: both profiles are certified "
     "at a fixed seed, because SynthID removal near the strength floor is seed-dependent.",
 )
-_hf_token_option = click.option("--hf-token", type=str, default=None, help="Hugging Face API token.")
+
+
+def _warn_hf_token_flag(_ctx: click.Context, _param: click.Parameter, value: str | None) -> str | None:
+    """Warn (never echoing the value) that a command-line token leaks into history and ``ps``."""
+    if value is not None:
+        click.echo("Warning: --hf-token is deprecated; set HF_TOKEN in the environment or .env instead.", err=True)
+    return value
+
+
+# Not ``envvar="HF_TOKEN"``: the loaders already read HF_TOKEN themselves when this is None,
+# and an envvar would make the deprecation warning fire for the recommended path too.
+_hf_token_option = click.option(
+    "--hf-token",
+    type=str,
+    default=None,
+    callback=_warn_hf_token_flag,
+    help="Deprecated: set HF_TOKEN instead (a token argument is visible in shell history and ps).",
+)
 _humanize_option = click.option(
     "--humanize", type=float, default=0.0, help="Analog Humanizer film grain intensity (0 = off, typical: 2.0-6.0)."
 )

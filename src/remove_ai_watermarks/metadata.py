@@ -22,6 +22,7 @@ from remove_ai_watermarks._internal.constants import (
     PNG_METADATA_CHUNKS,
     RIFF_METADATA_CHUNKS,
 )
+from remove_ai_watermarks._internal.utils import atomic_output
 
 logger = logging.getLogger(__name__)
 
@@ -1360,14 +1361,16 @@ def _strip_jpeg_metadata_lossless(source_path: Path, output_path: Path) -> bool:
         if not _jpeg_app_carries_ai(marker, data[i + 4 : seg_end]):
             out += data[i:seg_end]
         i = seg_end
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(bytes(out))
-    try:
-        exif = piexif.load(str(output_path))
-        if _scrub_ai_exif(exif):
-            piexif.insert(piexif.dump(exif), str(output_path))
-    except Exception:
-        logger.debug("piexif EXIF scrub skipped on %s", output_path, exc_info=True)
+    # Both rewrites (ours, then piexif's) land on a sibling temp published atomically:
+    # the default in-place strip must never leave the only copy truncated.
+    with atomic_output(output_path) as temporary_path:
+        temporary_path.write_bytes(bytes(out))
+        try:
+            exif = piexif.load(str(temporary_path))
+            if _scrub_ai_exif(exif):
+                piexif.insert(piexif.dump(exif), str(temporary_path))
+        except Exception:
+            logger.debug("piexif EXIF scrub skipped on %s", output_path, exc_info=True)
     return True
 
 
@@ -1501,8 +1504,8 @@ def remove_ai_metadata(
         cleaned, tc260_blanked = blank_tc260_aigc_tags(cleaned)
         cleaned, blanked = blank_ai_xmp_packets(cleaned)
         cleaned, exif_blanked = blank_ai_exif_tokens(cleaned)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(cleaned)
+        with atomic_output(output_path) as temporary_path:
+            temporary_path.write_bytes(cleaned)
         logger.info(
             "Stripped %d AI-provenance box(es), blanked %d native TC260 tag(s) + "
             "%d meta-box XMP packet(s) + %d EXIF token(s) → %s",
@@ -1625,8 +1628,8 @@ def remove_ai_metadata(
             with contextlib.suppress(Exception):
                 save_kwargs["exif"] = piexif.dump(exif_data)
 
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        img.save(output_path, **save_kwargs)
+        with atomic_output(output_path) as temporary_path:
+            img.save(temporary_path, **save_kwargs)
 
     logger.info("Stripped AI metadata → %s", output_path)
     return output_path

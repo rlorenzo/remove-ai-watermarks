@@ -216,15 +216,17 @@ them.
 
 ## Hugging Face authentication
 
-Pass a Hugging Face token directly when the selected model or account requires
-one:
+Set `HF_TOKEN` when the selected model or account requires a token. The CLI
+reads it from the environment and from a local `.env` file; the same name is
+documented in `.env.example`.
 
 ```bash
-remove-ai-watermarks invisible image.png --hf-token "$HF_TOKEN"
+export HF_TOKEN=hf_...
+remove-ai-watermarks invisible image.png
 ```
 
-The CLI also loads `HF_TOKEN` from the environment and from a local `.env`
-file. The same name is documented in `.env.example`.
+The `--hf-token` option still works but is deprecated and prints a warning: a
+token passed as an argument lands in shell history and is visible in `ps`.
 
 ## Troubleshooting
 

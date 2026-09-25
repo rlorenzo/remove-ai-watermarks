@@ -299,6 +299,22 @@ class TestInvisibleCommand:
         assert output.exists()
         mock_engine.remove_watermark.assert_called_once()
 
+    def test_hf_token_flag_warns_without_echoing_the_token(self, runner, sample_png, tmp_path):
+        mock_cls, _mock_engine = _mock_invisible_engine()
+        with (
+            patch("remove_ai_watermarks.invisible_engine.is_available", return_value=True),
+            patch("remove_ai_watermarks.cli.InvisibleEngine", mock_cls, create=True),
+            patch("remove_ai_watermarks.invisible_engine.InvisibleEngine", mock_cls),
+        ):
+            result = runner.invoke(
+                main,
+                ["invisible", str(sample_png), "-o", str(tmp_path / "clean.png"), "--force", "--hf-token", "hf_s3cret"],
+            )
+        assert result.exit_code == 0, result.output
+        assert "--hf-token is deprecated" in result.stderr
+        assert "HF_TOKEN" in result.stderr
+        assert "hf_s3cret" not in result.output
+
     def test_invisible_cpu_offload_flows_to_engine(self, runner, sample_png, tmp_path):
         mock_cls, _mock_engine = _mock_invisible_engine()
         output = tmp_path / "clean.png"

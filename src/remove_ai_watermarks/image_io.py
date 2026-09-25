@@ -40,6 +40,9 @@ def imread(path: str | Path, flags: int | None = None) -> NDArray[Any] | None:
     Pillow, HEIC works when the optional ``pillow-heif`` plugin is installed. This lets
     the pixel path (visible removal) read the same formats the metadata path already
     scans; normal PNG/JPEG/WebP never reach the fallback, so they are unaffected.
+
+    Raises ``PIL.Image.DecompressionBombError`` when the header declares more pixels
+    than Pillow's ``MAX_IMAGE_PIXELS`` budget allows (:func:`_check_pixel_budget`).
     """
     import cv2
     import numpy as np
@@ -52,12 +55,33 @@ def imread(path: str | Path, flags: int | None = None) -> NDArray[Any] | None:
         return None
     if data.size == 0:
         return None
+    _check_pixel_budget(path)
     img = cv2.imdecode(data, flags)
     # cv2.imdecode returns None on an undecodable container (HEIC/AVIF); the type stub
     # omits that, hence the ignore.
     if img is not None:  # pyright: ignore[reportUnnecessaryComparison]
         return img
     return _pil_read(path, flags)
+
+
+def _check_pixel_budget(path: str | Path) -> None:
+    """Apply Pillow's decompression-bomb guard before cv2 decodes ``path``.
+
+    OpenCV's own ceiling is 2**30 pixels, so a few-hundred-KB PNG declaring
+    30000x30000 would decode to gigabytes. ``Image.open`` parses only the header and
+    raises ``DecompressionBombError`` above ``2 * Image.MAX_IMAGE_PIXELS`` -- the same
+    limit the Pillow paths already enforce, and hosts tune it the same way. Anything
+    Pillow cannot identify is left for cv2 to decide.
+    """
+    from PIL import Image
+
+    try:
+        with Image.open(path):
+            pass
+    except Image.DecompressionBombError:
+        raise
+    except Exception:
+        return
 
 
 _heif_registered = False
