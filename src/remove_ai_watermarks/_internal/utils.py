@@ -43,9 +43,9 @@ def atomic_output(output: Path) -> Generator[Path]:
     would give it). A symlinked ``output`` is published onto its target, as a plain
     write would be. The temporary is removed on failure.
     """
+    output.parent.mkdir(parents=True, exist_ok=True)
     if output.is_symlink():
         output = output.resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_name(f".{output.stem}-{secrets.token_hex(6)}{output.suffix}")
     # Owner-only from creation: a broader mode narrowed later would let another local
     # user open the inode in between and keep reading through that descriptor.

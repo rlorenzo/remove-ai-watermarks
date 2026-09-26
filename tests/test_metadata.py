@@ -786,6 +786,21 @@ class TestRemoveAiMetadata:
 
         assert created[temporary_path.name] == 0o600
 
+    @pytest.mark.skipif(os.name != "posix", reason="os.symlink target semantics")
+    def test_symlink_to_missing_parent_fails_like_a_plain_write(self, tmp_path):
+        """mkdir must run on the symlink's own (existing) parent, not the resolved target's.
+
+        A plain write following the symlink (``open()``) would raise FileNotFoundError
+        rather than implicitly creating the target's parent directory tree.
+        """
+        link = tmp_path / "link.png"
+        link.symlink_to(tmp_path / "missing_dir" / "target.png")
+
+        with pytest.raises(FileNotFoundError), atomic_output(link) as temporary_path:
+            temporary_path.write_bytes(b"new")
+
+        assert not (tmp_path / "missing_dir").exists()
+
     def test_in_place_rewrite_preserves_file_mode(self, tmp_path):
         pnginfo = PngInfo()
         pnginfo.add_text("parameters", "test data")
