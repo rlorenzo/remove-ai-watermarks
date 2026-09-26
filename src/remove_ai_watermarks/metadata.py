@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import io
 import itertools
 import json
 import logging
@@ -25,6 +26,7 @@ from remove_ai_watermarks._internal.constants import (
     PNG_SIGNATURE,
     RIFF_METADATA_CHUNKS,
 )
+from remove_ai_watermarks._internal.utils import atomic_output
 
 logger = logging.getLogger(__name__)
 
@@ -1564,14 +1566,20 @@ def _strip_jpeg_metadata_lossless(source_path: Path, output_path: Path) -> bool:
         if not _jpeg_app_carries_ai(marker, data[i + 4 : seg_end]):
             out += data[i:seg_end]
         i = seg_end
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(bytes(out))
+    cleaned = bytes(out)
+    # The best-effort piexif scrub runs in memory, so its failures only skip the scrub;
+    # the single file write below goes through the atomic publisher, and the default
+    # in-place strip never leaves the only copy truncated.
     try:
-        exif = piexif.load(str(output_path))
+        exif = piexif.load(cleaned)
         if _scrub_ai_exif(exif):
-            piexif.insert(piexif.dump(exif), str(output_path))
+            scrubbed = io.BytesIO()
+            piexif.insert(piexif.dump(exif), cleaned, scrubbed)
+            cleaned = scrubbed.getvalue()
     except Exception:
         logger.debug("piexif EXIF scrub skipped on %s", output_path, exc_info=True)
+    with atomic_output(output_path) as temporary_path:
+        temporary_path.write_bytes(cleaned)
     return True
 
 
@@ -1647,9 +1655,8 @@ def _strip_png_metadata_lossless(source_path: Path, output_path: Path, keep_stan
         pos = end
     else:
         return False  # ran out of bytes before IEND: not a complete PNG
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("wb") as stream:
-        stream.write(out)
+    with atomic_output(output_path) as temporary_path:
+        temporary_path.write_bytes(out)
     return True
 
 
@@ -1801,8 +1808,9 @@ def strip_and_verify(
         out,
         ",".join(sorted(remaining)),
     )
-    if not image_io.imwrite(out, image):
-        raise OSError(f"Failed to normalize image after incomplete metadata stripping: {out}")
+    with atomic_output(out) as temporary_path:
+        if not image_io.imwrite(temporary_path, image):
+            raise OSError(f"Failed to normalize image after incomplete metadata stripping: {out}")
     return out, get_ai_metadata(out)
 
 
@@ -1870,8 +1878,8 @@ def remove_ai_metadata(
         cleaned, tc260_blanked = blank_tc260_aigc_tags(cleaned)
         cleaned, blanked = blank_ai_xmp_packets(cleaned)
         cleaned, exif_blanked = blank_ai_exif_tokens(cleaned)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(cleaned)
+        with atomic_output(output_path) as temporary_path:
+            temporary_path.write_bytes(cleaned)
         logger.info(
             "Stripped %d AI-provenance box(es), blanked %d native TC260 tag(s) + "
             "%d meta-box XMP packet(s) + %d EXIF token(s) → %s",
@@ -2015,14 +2023,16 @@ def remove_ai_metadata(
             with contextlib.suppress(Exception):
                 save_kwargs["exif"] = piexif.dump(exif_data)
 
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        if not keep_standard:
-            # Pillow's PNG/WebP/JPEG savers fall back to im.info["icc_profile"], so a
-            # profile would survive a strip that promised to remove everything.
-            # --remove-all drops it; the default strip keeps it (display fidelity,
-            # issue #98), which is also what the lossless walkers do.
-            img.info.pop("icc_profile", None)
-        img.save(output_path, **save_kwargs)
+    if not keep_standard:
+        # Pillow's PNG/WebP/JPEG savers fall back to im.info["icc_profile"], so a
+        # profile would survive a strip that promised to remove everything.
+        # --remove-all drops it; the default strip keeps it (display fidelity,
+        # issue #98), which is also what the lossless walkers do.
+        img.info.pop("icc_profile", None)
+    # Saved from the loaded copy after the source is closed: Windows refuses to
+    # os.replace onto a file Pillow still holds open (multi-frame formats keep it).
+    with atomic_output(output_path) as temporary_path:
+        img.save(temporary_path, **save_kwargs)
 
     logger.info("Stripped AI metadata → %s", output_path)
     return output_path
